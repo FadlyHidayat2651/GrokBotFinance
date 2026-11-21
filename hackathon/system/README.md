@@ -10,7 +10,11 @@ The process does not use the current directory. It reads only the folder it was 
 
 ## How a case is decided
 
-The pipeline is `loader.py` → `facts.py` → `analyze.py` → `decide.py` → `explain.py`.
+The pipeline is:
+
+`loader.py` → `facts.py` → `analyze.py` → `decide.py` (first pass) → optional `surrounding.py` → `decide.py` (second pass if needed) → `explain.py`.
+
+See `ARCHITECTURE.md` for the full diagram and layer map.
 
 `loader.py` joins the institution files. `facts.py` reads each document and pulls amounts, dates, account numbers, names, and table rows. `analyze.py` labels support chats and staff notes with fixed phrases (structuring, a refused corridor explanation, mule activity, third-party use, a returned cash withdrawal, a sale, a gift, a loan from a friend). A document type such as an invoice, register, or bank statement is not labeled this way. Keywords inside those papers are read by the decision engine directly.
 
@@ -20,6 +24,16 @@ The pipeline is `loader.py` → `facts.py` → `analyze.py` → `decide.py` → 
 2. Documented explanations. A list match on a different party, business records whose lines match the cash, a booking that names the travellers, a sale receipt, a returned withdrawal, a solicitor or insurer or completion or redundancy letter, a loan and a dealer invoice, a contract schedule, freight invoices, a payment file, an invoice or purchase order, a refund or credit note, a gift letter, a group chart, a factoring remittance, a cancellation, a tenancy deposit, an employment contract plus the customer's own statement, or a bank statement that shows the customer holds the other account.
 3. Close only when every alert in the case is covered. Own-account transfers at or above 5 times the declared baseline become `RFI_UPDATED_PROFILE`. On payments_fx, a held payment of £10,000 or more to anyone other than the client stays `RFI_PURPOSE_DOCUMENTS` until an invoice or contract on file matches that payment.
 4. Anything left over is an RFI when one document would settle it, and an escalation when it would not. Unexplained just-under-threshold payments are structuring. An unexplained higher-risk corridor is escalated. A list match that nothing settles is `RFI_COUNTERPARTY_DETAILS`.
+
+### Surrounding LLM (update-v2)
+
+When the first pass lands on a weak residue (`ESC_UNEXPLAINED_FUNDS`, `RFI_SOURCE_OF_FUNDS`, or `RFI_PURPOSE_DOCUMENTS`) and a model key is available, `surrounding.py` runs a second investigation:
+
+1. Ask the model for free-text labels, short findings, and concrete `missing_info` (never a verdict).
+2. Apply any new labels and re-run `decide.py`.
+3. If the case is still `ESC_UNEXPLAINED_FUNDS` and the model named a concrete ask, downgrade to an RFI. Surrounding must not invent CLOSE.
+
+Set `DISABLE_SURROUNDING=1` to keep the first-pass-only path. Set `DISABLE_LLM=1` to disable every model call. Without API keys the system stays fully deterministic.
 
 Round amounts, a shared device on its own, and crypto on its own do not decide a case. An earlier review is not evidence and is not cited.
 
