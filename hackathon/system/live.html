@@ -2,33 +2,147 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AML triage</title>
   <style>
-    body { font: 15px/1.4 sans-serif; margin: 16px; color: #111; background: #fff; }
-    form, fieldset { margin: 0 0 12px; padding: 8px; border: 1px solid #ccc; }
-    label { margin-right: 12px; }
-    #status { margin: 8px 0; }
-    #scroller { height: 70vh; overflow: auto; border: 1px solid #ccc; }
-    .row { box-sizing: border-box; height: 280px; overflow: auto; border-bottom: 1px solid #ddd; padding: 8px; }
+    :root {
+      --bg: #f7f7f5;
+      --surface: #ffffff;
+      --text: #1c1c1a;
+      --muted: #66655f;
+      --border: #dddcd6;
+      --accent: #2f5fd0;
+      --accent-text: #ffffff;
+      --ok: #1f7a45;
+      --ok-bg: #e5f3ea;
+      --bad: #b3261e;
+      --bad-bg: #fbe9e7;
+      --chip: #efeee9;
+      --radius: 8px;
+      --gap: 12px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #161615;
+        --surface: #1f1f1d;
+        --text: #ecebe6;
+        --muted: #a3a29b;
+        --border: #3a3936;
+        --accent: #7ea2ff;
+        --accent-text: #10131a;
+        --ok: #79d29b;
+        --ok-bg: #18301f;
+        --bad: #ff9a8f;
+        --bad-bg: #3a1d1a;
+        --chip: #2b2b28;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      margin: 0 auto;
+      padding: 16px;
+      max-width: 1100px;
+      color: var(--text);
+      background: var(--bg);
+    }
+    h1 { font-size: 20px; margin: 0 0 var(--gap); }
+    h2 { font-size: 16px; margin: 0 0 8px; }
+    form, fieldset, .panel {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: var(--gap);
+      margin: 0 0 var(--gap);
+      padding: var(--gap);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+    legend { padding: 0 4px; color: var(--muted); }
+    label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+    label.inline { flex-direction: row; align-items: center; gap: 6px; }
+    label.grow { flex: 1 1 260px; }
+    input, select, button {
+      font: inherit;
+      color: var(--text);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      min-height: 34px;
+    }
+    input[type="checkbox"] { min-height: 0; }
+    button { cursor: pointer; background: var(--chip); }
+    button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+    button:disabled { cursor: default; opacity: 0.5; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .muted { color: var(--muted); font-size: 13px; }
+    #dataset-info { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+    #message { margin: 0 0 var(--gap); padding: 8px 12px; border-radius: var(--radius); color: var(--bad); background: var(--bad-bg); }
+    #status { margin: 8px 0; color: var(--muted); }
+    #score { display: block; }
+    #score[hidden] { display: none; }
+    #score-summary { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 0 0 var(--gap); }
+    #score-summary div { padding: 8px 10px; background: var(--bg); border-radius: 6px; }
+    #score-summary dt { font-size: 12px; color: var(--muted); }
+    #score-summary dd { margin: 0; font-size: 18px; font-variant-numeric: tabular-nums; }
+    #score-error { color: var(--bad); }
+    .score-body { display: flex; flex-wrap: wrap; gap: var(--gap); align-items: flex-start; }
+    #confusion { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    #confusion caption { text-align: left; font-size: 13px; color: var(--muted); padding-bottom: 4px; }
+    #confusion th, #confusion td { border: 1px solid var(--border); padding: 4px 10px; text-align: right; }
+    #confusion th { font-weight: 600; font-size: 13px; }
+    #confusion td.diag { background: var(--ok-bg); color: var(--ok); }
+    #confusion td.off { background: var(--bad-bg); color: var(--bad); }
+    .mismatch-box { flex: 1 1 320px; min-width: 0; }
+    #mismatches { margin: 0; padding-left: 20px; }
+    #mismatches li { margin-bottom: 8px; }
+    .rationale { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+    #scroller { height: 70vh; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+    .row { height: 280px; overflow: auto; border-bottom: 1px solid var(--border); padding: 10px 12px; }
     .full .row { height: auto; }
-    pre { white-space: pre-wrap; margin: 4px 0; }
-    #custom { border-top: 1px solid #ccc; margin-top: 12px; padding-top: 8px; }
+    .row > div { margin-top: 2px; overflow-wrap: anywhere; }
+    .head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+    .chip { display: inline-block; padding: 0 8px; border-radius: 999px; background: var(--chip); font-size: 12px; }
+    .expected { padding: 4px 8px; border-radius: 6px; }
+    .expected.ok { background: var(--ok-bg); color: var(--ok); }
+    .expected.bad { background: var(--bad-bg); color: var(--bad); }
+    .expected .rationale { color: inherit; opacity: 0.85; }
+    .evidence { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .evidence button { min-height: 0; padding: 1px 8px; font-size: 12px; border-radius: 999px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0; font-size: 12px; }
+    #custom { margin-top: var(--gap); }
+    #custom-result article { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+    dialog { width: min(760px, calc(100vw - 32px)); max-height: 85vh; padding: 0; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+    dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+    .dialog-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--gap); padding: 12px 16px; border-bottom: 1px solid var(--border); }
+    .dialog-head form { margin: 0; padding: 0; border: 0; background: none; }
+    #evidence-text { padding: 12px 16px; margin: 0; font-size: 13px; max-height: 65vh; overflow: auto; }
+    @media (max-width: 600px) {
+      body { padding: 12px; }
+      form > *, fieldset > * { flex: 1 1 100%; }
+      label.inline { flex: 0 1 auto; }
+    }
   </style>
 </head>
 <body>
-  <p>Control order and appearance are placeholders.</p>
-  <form id="run-form">
-    <label>Institution
-      <select id="institution">
-        <option>bank</option>
-        <option>emoney</option>
-        <option>investment</option>
-        <option>payments_fx</option>
-      </select>
+  <h1>AML triage</h1>
+  <form id="dataset-form" aria-label="Dataset">
+    <label>Dataset <select id="dataset"></select></label>
+    <label class="grow">Add a dataset folder
+      <input id="dataset-path" placeholder="/abs/path/to/dataset" autocomplete="off" spellcheck="false">
     </label>
-    <label>Limit <input id="limit" type="number" min="1" placeholder="all"></label>
-    <button type="submit">Start run</button>
+    <button type="submit">Add</button>
+    <p id="dataset-info" class="muted"></p>
   </form>
+  <form id="run-form" aria-label="Run">
+    <label>Institution <select id="institution"></select></label>
+    <label>Limit <input id="limit" type="number" min="1" placeholder="all"></label>
+    <button type="submit" class="primary">Start run</button>
+    <button type="button" id="score-gold" hidden>Score gold_output.jsonl</button>
+  </form>
+  <p id="message" role="alert" hidden></p>
   <fieldset>
     <legend>Filters on this run</legend>
     <label>Verdict
@@ -42,69 +156,175 @@
     <label>Reason code
       <select id="reason"><option value="">All</option></select>
     </label>
+    <label class="inline"><input id="only-mismatch" type="checkbox" disabled> Mismatches only</label>
   </fieldset>
+  <section id="score" class="panel" aria-labelledby="score-title" hidden>
+    <h2 id="score-title">Results</h2>
+    <p id="score-error" hidden></p>
+    <dl id="score-summary"></dl>
+    <div class="score-body">
+      <table id="confusion"></table>
+      <div class="mismatch-box">
+        <h2>Mismatches</h2>
+        <ol id="mismatches"></ol>
+      </div>
+    </div>
+  </section>
   <p id="status">Idle.</p>
   <div id="scroller"><div id="viewport"><div id="slice"></div></div></div>
   <div id="custom">
-    <form id="case-form">
+    <form id="case-form" aria-label="Single case">
       <label>Case
         <select id="case-id"></select>
       </label>
       <button type="submit">Run this case</button>
     </form>
-    <form id="upload-form">
+    <form id="upload-form" aria-label="Upload">
       <label>Folder <input id="folder" type="file" webkitdirectory multiple></label>
       <button type="submit">Run uploaded folder</button>
     </form>
     <div id="custom-result"></div>
   </div>
+  <dialog id="evidence-dialog" aria-labelledby="evidence-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="evidence-title"></h2>
+        <div id="evidence-meta" class="muted"></div>
+      </div>
+      <form method="dialog"><button type="submit">Close</button></form>
+    </div>
+    <pre id="evidence-text"></pre>
+  </dialog>
   <script>
     const params = new URLSearchParams(location.search);
     const LIST_MODE = params.get("list") || "window";
     const TRANSPORT = params.get("transport") || "sse";
     const ROW_H = 280;
+    const VERDICTS = ["CLOSE", "RFI", "ESCALATE"];
     const scroller = document.getElementById("scroller");
     const viewport = document.getElementById("viewport");
     const slice = document.getElementById("slice");
     const status = document.getElementById("status");
+    const message = document.getElementById("message");
+    const datasetSelect = document.getElementById("dataset");
+    const institutionSelect = document.getElementById("institution");
+    const onlyMismatch = document.getElementById("only-mismatch");
     if (LIST_MODE === "full") scroller.classList.add("full");
 
     let rows = [];
     let runId = null;
     let runStarts = 0;
     let readerStop = null;
+    let datasets = [];
+    let labels = {};
+    let mismatchIds = null;
+
+    async function api(path, body) {
+      const options = body === undefined ? {} : {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      };
+      const response = await fetch(path, options);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || response.statusText);
+      return payload;
+    }
+
+    function showError(error) {
+      message.textContent = error && error.message ? error.message : String(error);
+      message.hidden = false;
+    }
+
+    function clearError() {
+      message.hidden = true;
+      message.textContent = "";
+    }
+
+    function guarded(handler) {
+      return async function (event) {
+        if (event && event.type === "submit") event.preventDefault();
+        clearError();
+        try { await handler.call(this, event); } catch (error) { showError(error); }
+      };
+    }
+
+    function currentDataset() {
+      return datasets.find(function (dataset) { return dataset.id === datasetSelect.value; }) || null;
+    }
+
+    function isMismatch(scored) {
+      return !scored.verdict_ok || !scored.reason_code_ok || scored.schema_issues.length > 0;
+    }
 
     function shownRows() {
       const verdict = document.getElementById("verdict").value;
       const reason = document.getElementById("reason").value;
+      const onlyBad = onlyMismatch.checked && mismatchIds;
       return rows.filter(function (row) {
         if (verdict && row.line.verdict !== verdict) return false;
         if (reason && row.line.reason_code !== reason) return false;
+        if (onlyBad && !mismatchIds.has(row.line.case_id)) return false;
         return true;
       });
     }
 
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function evidenceList(ids, dataset, institution) {
+      const box = el("div", "evidence");
+      box.append(el("span", "muted", "Evidence"));
+      ids.forEach(function (id) {
+        if (!dataset || !institution) {
+          box.append(el("span", "chip", id));
+          return;
+        }
+        const button = el("button", "", id);
+        button.type = "button";
+        button.dataset.evidence = id;
+        button.dataset.dataset = dataset;
+        button.dataset.institution = institution;
+        button.setAttribute("aria-label", "Open evidence " + id);
+        box.append(button);
+      });
+      return box;
+    }
+
     function fillRow(article, row) {
       article.replaceChildren();
-      const heading = document.createElement("strong");
-      heading.textContent = row.line.case_id + " " + row.line.verdict + " " + row.line.reason_code;
-      const agent = document.createElement("div");
-      agent.textContent = "Agent " + row.agent;
-      const rules = document.createElement("div");
-      rules.textContent = "Rules " + row.rules.map(function (rule) {
-        return rule.rule_id + " (" + rule.alert_id + ")";
-      }).join(", ");
-      const payments = document.createElement("div");
-      payments.textContent = row.payments.map(function (txn) {
-        return txn.amount + " from " + txn.counterparty_name + " on " + txn.booked_at + " (" + txn.transaction_id + ")";
-      }).join("; ");
-      const docs = document.createElement("div");
-      docs.textContent = row.documents.map(function (doc) {
-        return doc.doc_id + ": " + doc.title;
-      }).join("; ");
-      const pre = document.createElement("pre");
-      pre.textContent = JSON.stringify(row.line);
-      article.append(heading, agent, rules, payments, docs, pre);
+      const head = el("div", "head");
+      head.append(
+        el("strong", "", row.line.case_id + " " + row.line.verdict + " " + row.line.reason_code)
+      );
+      if (row.institution) head.append(el("span", "chip", row.institution));
+      article.append(head);
+      const label = labels[row.line.case_id];
+      if (label) {
+        const ok = label.expected_verdict === row.line.verdict && label.expected_reason_code === row.line.reason_code;
+        const expected = el("div", "expected " + (ok ? "ok" : "bad"));
+        expected.append(el("div", "", (ok ? "Matches expected " : "Expected ") + label.expected_verdict + " " + label.expected_reason_code));
+        if (label.rationale) expected.append(el("p", "rationale", label.rationale));
+        article.append(expected);
+      }
+      article.append(
+        el("div", "", "Agent " + row.agent),
+        el("div", "", "Rules " + row.rules.map(function (rule) {
+          return rule.rule_id + " (" + rule.alert_id + ")";
+        }).join(", ")),
+        el("div", "", row.payments.map(function (txn) {
+          return txn.amount + " from " + txn.counterparty_name + " on " + txn.booked_at + " (" + txn.transaction_id + ")";
+        }).join("; ")),
+        el("div", "", row.documents.map(function (doc) {
+          return doc.doc_id + ": " + doc.title;
+        }).join("; ")),
+        evidenceList(row.line.evidence || [], row.dataset, row.institution),
+        el("pre", "", JSON.stringify(row.line))
+      );
     }
 
     function paint() {
@@ -158,6 +378,124 @@
       if (codes.indexOf(current) >= 0) select.value = current;
     }
 
+    function clearScore() {
+      labels = {};
+      mismatchIds = null;
+      onlyMismatch.disabled = true;
+      document.getElementById("score").hidden = true;
+    }
+
+    function stat(name, value) {
+      const box = el("div");
+      box.append(el("dt", "", name), el("dd", "", value));
+      return box;
+    }
+
+    function renderConfusion(scoredRows) {
+      const counts = {};
+      VERDICTS.forEach(function (expected) {
+        counts[expected] = {};
+        VERDICTS.forEach(function (sent) { counts[expected][sent] = 0; });
+      });
+      scoredRows.forEach(function (row) {
+        const sent = VERDICTS.indexOf(row.sent_verdict) >= 0 ? row.sent_verdict : "ESCALATE";
+        if (counts[row.expected_verdict]) counts[row.expected_verdict][sent] += 1;
+      });
+      const table = document.getElementById("confusion");
+      const caption = el("caption", "", "Rows expected, columns predicted");
+      const head = el("tr");
+      head.append(el("th", "", ""));
+      VERDICTS.forEach(function (sent) {
+        const th = el("th", "", sent);
+        th.scope = "col";
+        head.append(th);
+      });
+      const thead = el("thead");
+      thead.append(head);
+      const tbody = el("tbody");
+      VERDICTS.forEach(function (expected) {
+        const tr = el("tr");
+        const th = el("th", "", expected);
+        th.scope = "row";
+        tr.append(th);
+        VERDICTS.forEach(function (sent) {
+          const n = counts[expected][sent];
+          tr.append(el("td", expected === sent ? "diag" : (n ? "off" : ""), String(n)));
+        });
+        tbody.append(tr);
+      });
+      table.replaceChildren(caption, thead, tbody);
+    }
+
+    function streamedRow(caseId) {
+      return rows.find(function (item) { return item.line.case_id === caseId; }) || null;
+    }
+
+    function renderMismatches(scoredRows) {
+      const list = document.getElementById("mismatches");
+      const bad = scoredRows.filter(isMismatch);
+      if (!bad.length) {
+        list.replaceChildren(el("li", "", "No mismatches."));
+        return;
+      }
+      list.replaceChildren.apply(list, bad.map(function (row) {
+        const item = el("li");
+        item.append(
+          el("strong", "", row.case_id),
+          el("div", "", "Expected " + row.expected_verdict + " " + row.expected_reason_code
+            + ", sent " + (row.sent_verdict || "nothing") + " " + (row.sent_reason_code || ""))
+        );
+        if (row.key_evidence_missing.length) {
+          const seen = streamedRow(row.case_id);
+          const box = evidenceList(row.key_evidence_missing, seen && seen.dataset, seen && seen.institution);
+          box.firstChild.textContent = "Missing key evidence";
+          item.append(box);
+        }
+        if (row.schema_issues.length) item.append(el("div", "", "Schema: " + row.schema_issues.join("; ")));
+        if (row.rationale) item.append(el("p", "rationale", row.rationale));
+        return item;
+      }));
+    }
+
+    function renderScore(score, source, fromRun) {
+      const panel = document.getElementById("score");
+      const error = document.getElementById("score-error");
+      const summary = document.getElementById("score-summary");
+      panel.hidden = false;
+      document.getElementById("score-title").textContent = "Results for " + source;
+      labels = {};
+      mismatchIds = null;
+      error.hidden = true;
+      summary.replaceChildren();
+      document.getElementById("confusion").replaceChildren();
+      document.getElementById("mismatches").replaceChildren();
+      if (score.error) {
+        error.textContent = "Scorer failed: " + score.error;
+        error.hidden = false;
+      } else {
+        score.rows.forEach(function (row) { labels[row.case_id] = row; });
+        if (score.labels_only) {
+          error.textContent = "This dataset has expected.jsonl but no score_test.py, so cases show labels without a score.";
+          error.hidden = false;
+        } else {
+          if (fromRun) mismatchIds = new Set(score.rows.filter(isMismatch).map(function (row) { return row.case_id; }));
+          summary.append(
+            stat("Verdict score vs escalate-all", score.verdict_score_vs_escalate_all.toFixed(3)),
+            stat("Cost / escalate-all cost", score.cost + " / " + score.escalate_all_cost),
+            stat("Correct verdicts", score.correct_verdicts + "/" + score.cases),
+            stat("Reason-code accuracy", (score.reason_code_accuracy * 100).toFixed(1) + "%"),
+            stat("Wrongful closes", String(score.wrongful_closes)),
+            stat("Schema failures", String(score.schema_failures))
+          );
+          if (score.missing_cases.length) summary.append(stat("Missing cases", String(score.missing_cases.length)));
+          renderConfusion(score.rows);
+          renderMismatches(score.rows);
+        }
+      }
+      onlyMismatch.disabled = !mismatchIds;
+      paint();
+    }
+
     function stopReader() {
       if (readerStop) readerStop();
       readerStop = null;
@@ -172,6 +510,8 @@
         paint();
         status.textContent = "Run " + runId + " received " + rows.length + ". Showing " + shownRows().length + ".";
       } else if (event.kind === "done") {
+        if (event.score) renderScore(event.score, "run " + runId, true);
+        if (event.error) showError(new Error("Run failed: " + event.error));
         status.textContent = "Run " + runId + " finished. Received " + rows.length + ". Showing " + shownRows().length + ".";
         stopReader();
       }
@@ -196,20 +536,20 @@
       }
     }
 
-    async function startRun(institution, limit) {
+    function resetRun() {
       runStarts += 1;
       stopReader();
       runId = null;
       rows = [];
+      clearScore();
       paint();
-      const body = { institution: institution };
+    }
+
+    async function startRun(dataset, institution, limit) {
+      resetRun();
+      const body = { dataset: dataset, institution: institution };
       if (limit) body.limit = limit;
-      const response = await fetch("/api/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const started = await response.json();
+      const started = await api("/api/run", body);
       runId = started.run_id;
       status.textContent = "Run " + runId + " started.";
       if (TRANSPORT === "tail") {
@@ -224,34 +564,113 @@
       }
     }
 
-    document.getElementById("run-form").addEventListener("submit", function (event) {
-      event.preventDefault();
+    function limitValue() {
       const limit = document.getElementById("limit").value;
-      startRun(document.getElementById("institution").value, limit ? Number(limit) : null);
-    });
+      return limit ? Number(limit) : null;
+    }
+
+    document.getElementById("run-form").addEventListener("submit", guarded(function () {
+      return startRun(datasetSelect.value, institutionSelect.value, limitValue());
+    }));
     document.getElementById("verdict").addEventListener("change", paint);
     document.getElementById("reason").addEventListener("change", paint);
+    onlyMismatch.addEventListener("change", paint);
     scroller.addEventListener("scroll", function () {
       if (LIST_MODE !== "full") paint();
     });
-    document.getElementById("institution").addEventListener("change", async function () {
+    institutionSelect.addEventListener("change", guarded(async function () {
       await loadCases();
-      if (runId) {
-        const limit = document.getElementById("limit").value;
-        startRun(this.value, limit ? Number(limit) : null);
-      }
-    });
+      if (runId) await startRun(datasetSelect.value, institutionSelect.value, limitValue());
+    }));
+
+    async function loadDatasets(selectId) {
+      datasets = await api("/api/datasets");
+      datasetSelect.replaceChildren.apply(datasetSelect, datasets.map(function (dataset) {
+        return new Option(dataset.label + " (" + dataset.institutions.length + ")", dataset.id);
+      }));
+      datasetSelect.value = selectId || datasets[0].id;
+      await chooseDataset();
+    }
+
+    async function chooseDataset() {
+      const dataset = currentDataset();
+      const options = [new Option("All institutions", "*")].concat(dataset.institutions.map(function (name) {
+        return new Option(name, name);
+      }));
+      institutionSelect.replaceChildren.apply(institutionSelect, options);
+      institutionSelect.value = dataset.has_labels ? "*" : dataset.institutions[0];
+      const flags = [];
+      if (dataset.has_labels) flags.push("labels");
+      if (dataset.has_scorer) flags.push("scorer");
+      if (dataset.has_gold) flags.push("gold output");
+      document.getElementById("dataset-info").textContent = dataset.root
+        + (flags.length ? ". Has " + flags.join(", ") + "." : ". No labels.");
+      document.getElementById("score-gold").hidden = !(dataset.has_gold && dataset.has_labels);
+      clearScore();
+      paint();
+      await loadCases();
+    }
 
     async function loadCases() {
-      const institution = document.getElementById("institution").value;
-      const response = await fetch("/api/cases?institution=" + encodeURIComponent(institution));
-      const payload = await response.json();
+      const dataset = datasetSelect.value;
+      const chosen = institutionSelect.value;
+      const names = chosen === "*" ? currentDataset().institutions : [chosen];
+      const lists = await Promise.all(names.map(function (name) {
+        return api("/api/cases?" + new URLSearchParams({ dataset: dataset, institution: name }));
+      }));
       const select = document.getElementById("case-id");
       select.replaceChildren();
-      payload.case_ids.forEach(function (caseId) {
-        select.append(new Option(caseId, caseId));
+      lists.forEach(function (payload) {
+        const parent = names.length > 1 ? el("optgroup") : select;
+        if (parent !== select) {
+          parent.label = payload.institution;
+          select.append(parent);
+        }
+        payload.case_ids.forEach(function (caseId) {
+          const option = new Option(caseId, caseId);
+          option.dataset.institution = payload.institution;
+          parent.append(option);
+        });
       });
     }
+
+    datasetSelect.addEventListener("change", guarded(chooseDataset));
+
+    document.getElementById("dataset-form").addEventListener("submit", guarded(async function () {
+      const input = document.getElementById("dataset-path");
+      const added = await api("/api/datasets", { path: input.value });
+      input.value = "";
+      await loadDatasets(added.id);
+    }));
+
+    document.getElementById("score-gold").addEventListener("click", guarded(async function () {
+      const result = await api("/api/score", { dataset: datasetSelect.value, source: "gold" });
+      renderScore(result.score, "gold_output.jsonl", false);
+    }));
+
+    async function openEvidence(button) {
+      const item = await api("/api/evidence?" + new URLSearchParams({
+        dataset: button.dataset.dataset,
+        institution: button.dataset.institution,
+        id: button.dataset.evidence,
+      }));
+      const kinds = { transaction: "Transaction", list_entry: "Internal list entry" };
+      document.getElementById("evidence-title").textContent = item.kind === "document"
+        ? item.id + ": " + item.title
+        : kinds[item.kind] + " " + item.id;
+      document.getElementById("evidence-meta").textContent = item.kind === "document"
+        ? [item.type, item.dated ? "dated " + item.dated : ""].filter(Boolean).join(", ")
+        : "";
+      document.getElementById("evidence-text").textContent = item.kind === "document"
+        ? item.text
+        : JSON.stringify(item.row, null, 2);
+      document.getElementById("evidence-dialog").showModal();
+    }
+
+    document.addEventListener("click", function (event) {
+      const button = event.target.closest("button[data-evidence]");
+      if (button) guarded(function () { return openEvidence(button); })();
+    });
 
     function showCustom(event) {
       const box = document.getElementById("custom-result");
@@ -261,45 +680,28 @@
       box.replaceChildren(article);
     }
 
-    document.getElementById("case-form").addEventListener("submit", async function (event) {
-      event.preventDefault();
-      const response = await fetch("/api/case", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          institution: document.getElementById("institution").value,
-          case_id: document.getElementById("case-id").value,
-        }),
-      });
-      showCustom(await response.json());
-    });
+    document.getElementById("case-form").addEventListener("submit", guarded(async function () {
+      const option = document.getElementById("case-id").selectedOptions[0];
+      if (!option) throw new Error("Pick a case first.");
+      showCustom(await api("/api/case", {
+        dataset: datasetSelect.value,
+        institution: option.dataset.institution,
+        case_id: option.value,
+      }));
+    }));
 
-    document.getElementById("upload-form").addEventListener("submit", async function (event) {
-      event.preventDefault();
+    document.getElementById("upload-form").addEventListener("submit", guarded(async function () {
       const files = {};
       const chosen = document.getElementById("folder").files;
       for (const file of chosen) {
         files[file.webkitRelativePath || file.name] = await file.text();
       }
-      runStarts += 1;
-      stopReader();
-      runId = null;
-      rows = [];
-      paint();
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ files: files }),
-      });
-      const started = await response.json();
+      resetRun();
+      const started = await api("/api/upload", { files: files });
       runId = started.run_id;
       const stream = await fetch((TRANSPORT === "tail" ? "/api/tail?run_id=" : "/api/events?run_id=") + encodeURIComponent(runId));
-      if (TRANSPORT === "tail") {
-        await readStream(stream);
-      } else {
-        await readStream(stream);
-      }
-    });
+      await readStream(stream);
+    }));
 
     function benchList() {
       const sample = [];
@@ -364,14 +766,14 @@
       document.body.append(pre);
     }
 
-    loadCases().then(function () {
+    loadDatasets().then(function () {
       if (params.get("bench") === "list") benchList();
       if (params.get("proof") === "1") proof();
-    });
+    }).catch(showError);
 
     async function proof() {
       const report = { runStarts_at_start: runStarts };
-      await startRun("emoney", 1);
+      await startRun("builtin", "emoney", 1);
       await waitFor(function () { return rows.length >= 1; });
       const first = rows[0];
       report.first = {
@@ -392,14 +794,14 @@
       report.starts_after_filter = runStarts;
       document.getElementById("verdict").value = "";
       paint();
-      await startRun("bank", 2);
+      await startRun("builtin", "bank", 2);
       await waitFor(function () { return rows.length >= 2 && rows.every(function (row) { return row.line.case_id.indexOf("BK-") === 0; }); });
       report.after_switch = rows.map(function (row) { return row.line.case_id; });
       report.starts_after_switch = runStarts;
       report.starts_after_first = startsAfterFirst;
       document.getElementById("verdict").value = "CLOSE";
       const startsBeforeLong = runStarts;
-      await startRun("bank", 1000);
+      await startRun("builtin", "bank", 1000);
       await waitFor(function () { return rows.length >= 30; });
       report.arrived_before_filter_check = rows.length;
       report.showing_while_running = shownRows().length;
