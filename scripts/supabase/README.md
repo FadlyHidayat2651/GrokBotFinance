@@ -22,19 +22,23 @@ Migration: [`migrations/001_hackathon_schema.sql`](migrations/001_hackathon_sche
 
 ## Credentials (never commit)
 
-Set **one** of:
+This loader uses **direct Postgres** (psycopg). Set **one** of:
 
 | Variable | Purpose |
 |---|---|
-| `SUPABASE_DB_URL` | **Preferred.** Postgres URI from Supabase → Project Settings → Database → Connection string (URI). Use the direct or session pooler URI with the DB password. |
+| `SUPABASE_DB_URL` | **Preferred / usually the one more secret you need.** Postgres URI from Supabase → Project Settings → Database → Connection string (URI). |
 | `DATABASE_URL` | Alias for the same Postgres URI |
 | `SUPABASE_URL` + `SUPABASE_DB_PASSWORD` | Convenience: builds `postgresql://postgres:…@db.<ref>.supabase.co:5432/postgres?sslmode=require` |
 
-Optional (not required for this loader):
+Common API secrets (useful for app clients, **not sufficient alone** for this loader):
 
 | Variable | Purpose |
 |---|---|
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase API service role — unused by the direct Postgres loader |
+| `SUPABASE_URL` | Project URL |
+| `SUPABASE_SECRET_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | Service-role / secret API key — cannot apply SQL migrations or COPY ~242k rows |
+| `SUPABASE_PUBLISHABLE_KEY` / `SUPABASE_JWKS_URL` | Client/auth metadata — unused by the loader |
+
+**Cloud Agents:** secrets are injected only when an agent **starts**. After adding secrets in the dashboard, start a **new** agent (existing runs will not see them).
 
 Copy [`.env.example`](.env.example) to a local `.env` (gitignored) if you load credentials that way.
 

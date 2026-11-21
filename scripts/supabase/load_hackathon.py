@@ -2,11 +2,15 @@
 """Load Fin Crime Hackathon JSONL datasets into Supabase Postgres.
 
 Reads only the hackathon/institutions tree. Credentials via env:
-  SUPABASE_DB_URL              preferred (Postgres connection string)
-  or DATABASE_URL              alias
-  or SUPABASE_URL + SUPABASE_DB_PASSWORD / SUPABASE_SERVICE_ROLE_KEY
-    (DB URL must still be set for direct Postgres; service role alone is not enough
-     for COPY-style bulk load — use the Supabase Dashboard → Database → URI)
+  SUPABASE_DB_URL                 preferred (Postgres connection string)
+  or DATABASE_URL                 alias
+  or SUPABASE_URL + SUPABASE_DB_PASSWORD
+                                  builds db.<ref>.supabase.co URI
+
+API keys alone are not enough for this loader (needs DDL + bulk SQL):
+  SUPABASE_URL, SUPABASE_SECRET_KEY / SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_PUBLISHABLE_KEY, SUPABASE_JWKS_URL — detected and reported,
+  but do not open a Postgres session.
 
 Usage:
   python load_hackathon.py [--data-dir PATH] [--skip-migrate] [--institutions a,b]
@@ -42,6 +46,28 @@ BATCH_SIZE = 2000
 # ---------------------------------------------------------------------------
 
 
+def _env_set(name: str) -> bool:
+    return bool(os.environ.get(name, "").strip())
+
+
+def report_credential_status() -> None:
+    """Print which credential env vars are present (never values)."""
+    keys = [
+        "SUPABASE_DB_URL",
+        "DATABASE_URL",
+        "SUPABASE_DB_PASSWORD",
+        "SUPABASE_URL",
+        "SUPABASE_SECRET_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_PUBLISHABLE_KEY",
+        "SUPABASE_JWKS_URL",
+        "SUPABASE_ANON_KEY",
+    ]
+    print("Credential env status (presence only):")
+    for k in keys:
+        print(f"  {k}={'SET' if _env_set(k) else 'UNSET'}")
+
+
 def resolve_db_url() -> str:
     """Resolve Postgres URL from env. Never print the value."""
     for key in ("SUPABASE_DB_URL", "DATABASE_URL"):
@@ -64,19 +90,43 @@ def resolve_db_url() -> str:
                 f"?sslmode=require"
             )
 
-    missing = [
-        "SUPABASE_DB_URL (preferred Postgres URI from Supabase → Database → Connection string)",
-        "or DATABASE_URL",
-        "or SUPABASE_URL + SUPABASE_DB_PASSWORD",
-    ]
-    print("No database credentials found in the environment.", file=sys.stderr)
-    print("Set one of:", file=sys.stderr)
-    for m in missing:
-        print(f"  - {m}", file=sys.stderr)
-    print(
-        "Optional (not used for direct Postgres load): SUPABASE_SERVICE_ROLE_KEY",
-        file=sys.stderr,
+    report_credential_status()
+    has_api = _env_set("SUPABASE_URL") and (
+        _env_set("SUPABASE_SECRET_KEY") or _env_set("SUPABASE_SERVICE_ROLE_KEY")
     )
+    print("\nNo Postgres connection credentials found.", file=sys.stderr)
+    if has_api:
+        print(
+            "SUPABASE_URL + API secret key are present, but the service-role/"
+            "secret key cannot run DDL or efficient COPY bulk load over REST.",
+            file=sys.stderr,
+        )
+        print(
+            "Add exactly one more secret to finish the load:",
+            file=sys.stderr,
+        )
+        print(
+            "  SUPABASE_DB_URL  — Postgres URI from Supabase → Project Settings"
+            " → Database → Connection string (URI)",
+            file=sys.stderr,
+        )
+        print(
+            "  (or SUPABASE_DB_PASSWORD with the existing SUPABASE_URL)",
+            file=sys.stderr,
+        )
+    else:
+        print("Set one of:", file=sys.stderr)
+        for m in (
+            "SUPABASE_DB_URL (preferred Postgres URI)",
+            "or DATABASE_URL",
+            "or SUPABASE_URL + SUPABASE_DB_PASSWORD",
+        ):
+            print(f"  - {m}", file=sys.stderr)
+        print(
+            "Note: Cloud Agent secrets are injected only when an agent starts;"
+            " start a new agent after adding secrets.",
+            file=sys.stderr,
+        )
     sys.exit(2)
 
 
