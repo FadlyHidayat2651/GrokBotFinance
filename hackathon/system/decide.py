@@ -186,7 +186,11 @@ def _statement_hit(case, doc, txn):
     if account_name and party_overlap(account_name, txn.get("counterparty_name") or ""):
         return True
     if is_customer_party(case, txn.get("counterparty_name") or "") and (
-        "OWN" in reference or "SAVING" in reference or "TRANSFER" in reference or "ISA" in reference
+        "OWN" in reference
+        or "SAVING" in reference
+        or "TRANSFER" in reference
+        or "ISA" in reference
+        or "FUNDING" in reference
     ):
         return True
     if "held by" in doc["text"].lower() and "OWN" in reference:
@@ -253,8 +257,9 @@ def _alert_covered(case, alert, matched_ids, newcos):
             return True
         if _ordinary_out(case, txn, newcos):
             return True
+        # Own-name funding can sit beside a documented supplier payment on TM01.
         if (
-            alert["rule_id"] == "TM07"
+            alert["rule_id"] in {"TM01", "TM07"}
             and txn.get("direction") == "in"
             and is_customer_party(case, txn.get("counterparty_name") or "")
         ):
@@ -370,15 +375,104 @@ def _assess_list(case):
     return "unsettled", evidence, sentences
 
 
+def _register_officer_dobs(doc):
+    """Pull officer/director names and birth dates from register prose or tables."""
+    found = []
+    for row in table_rows(doc):
+        person = row.get("Person") or row.get("Officer") or row.get("Director") or ""
+        born = row.get("Born") or row.get("Date of birth") or row.get("DOB") or ""
+        if person and born:
+            found.append((person, born))
+    for raw_line in (doc.get("text") or "").splitlines():
+        line = re.sub(r"\*+", "", raw_line).strip()
+        role = re.match(r"(Director|Officer|PSC)\s*:\s*(.+)$", line, flags=re.IGNORECASE)
+        if not role:
+            continue
+        rest = role.group(2).strip()
+        name_match = re.match(r"([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+)+)", rest)
+        if not name_match:
+            continue
+        person = name_match.group(1).strip()
+        born = None
+        year_paren = re.search(r"\(year of birth\s*(\d{4})\)", rest, flags=re.IGNORECASE)
+        dob = re.search(
+            r"(?:date of birth|born(?:\s+on)?|year of birth)\s*:?\s*([^.\n(]+)",
+            rest,
+            flags=re.IGNORECASE,
+        )
+        if year_paren:
+            born = year_paren.group(1)
+        elif dob:
+            born = dob.group(1).strip()
+        if person and born:
+            found.append((person, born))
+    return found
+
+
+def _year_mismatch(left, right):
+    left_date, _lp = parse_date(left)
+    right_date, _rp = parse_date(right)
+    if left_date and right_date:
+        return left_date.year != right_date.year
+    left_year = re.search(r"(19|20)\d{2}", str(left) or "")
+    right_year = re.search(r"(19|20)\d{2}", str(right) or "")
+    if left_year and right_year:
+        return left_year.group(0) != right_year.group(0)
+    return False
+
+
 def _one_list(case, alert, entry, txn, pay_date):
     entry_name = entry.get("name") or ""
     entry_id = entry.get("entry_id") or (alert.get("measured") or {}).get("list_entry") or ""
     evidence = [entry_id]
     if txn:
         evidence.append(txn["transaction_id"])
+    matched_on = ((alert.get("measured") or {}).get("matched_on") or "").lower()
+    payee = (txn.get("counterparty_name") if txn else "") or (alert.get("measured") or {}).get("matched_party") or ""
+    internal_case = ((entry.get("identifiers") or {}).get("internal_case") or "").strip()
+    # Strong same-party signals from the alert itself: DOB match or list case ref on the payment.
+    if txn and entry_name and (_person_match(payee, entry_name) or party_overlap(payee, entry_name)):
+        if "date of birth" in matched_on or re.search(r"\bdob\b", matched_on):
+            amount = gbp(txn["amount_gbp"])
+            when = (txn.get("booked_at") or "")[:10]
+            sentences = [
+                "The %s payment on %s to %s matched internal list entry %s on %s."
+                % (amount, when, payee, entry_id, matched_on or "name and date of birth"),
+                "List entry %s is %s, born %s."
+                % (entry_id, entry_name, entry.get("date_of_birth") or "the listed date"),
+                "Nothing on file shows a different party, so the listed person is treated as the counterparty.",
+            ]
+            if internal_case and internal_case in (txn.get("reference") or ""):
+                sentences[1] = (
+                    "The payment reference %s is the listed internal case number for %s."
+                    % (txn.get("reference"), entry_id)
+                )
+            return "same", evidence, sentences
+        if internal_case and internal_case in (txn.get("reference") or ""):
+            amount = gbp(txn["amount_gbp"])
+            when = (txn.get("booked_at") or "")[:10]
+            return "same", evidence, [
+                "The %s payment on %s to %s matched internal list entry %s and used reference %s."
+                % (amount, when, payee, entry_id, txn.get("reference")),
+                "List entry %s is %s, born %s."
+                % (entry_id, entry_name, entry.get("date_of_birth") or "the listed date"),
+                "The listed party is the counterparty, so the match is escalated.",
+            ]
     controlled = None
     control_bits = []
     for doc in docs_of(case, "significant_control_register", "company_register_extract"):
+        for person, born in _register_officer_dobs(doc):
+            if not entry_name or not _person_match(person, entry_name):
+                continue
+            if doc["doc_id"] not in evidence:
+                evidence.append(doc["doc_id"])
+            if entry.get("date_of_birth") and _year_mismatch(born, entry.get("date_of_birth")):
+                if controlled is not True:
+                    controlled = False
+                control_bits.append(
+                    "%s lists %s with date of birth %s, which is not list entry %s (%s)."
+                    % (doc["doc_id"], person, born.strip(), entry_id, entry.get("date_of_birth"))
+                )
         for row in table_rows(doc):
             person = row.get("Person") or row.get("Officer") or ""
             if not _person_match(person, entry_name):
@@ -726,6 +820,7 @@ def _explanations(case):
     found = []
     for builder in (
         _explain_list_different,
+        _explain_employer_bonus,
         _explain_records,
         _explain_booking,
         _explain_sale,
@@ -753,6 +848,83 @@ def _explanations(case):
     return found
 
 
+def _explain_employer_bonus(case):
+    """Recurring employer bonus documented by letter/receipt, optionally backed by a prior CLOSE."""
+    docs = docs_of(case, "receipt", "employer_letter", "payslip", "salary_letter")
+    if not docs:
+        return None
+    matched = []
+    evidence = []
+    sentences = []
+    for doc in docs:
+        text = (doc.get("text") or "").lower()
+        if "bonus" not in text and "annual bonus" not in text:
+            continue
+        hits = []
+        for txn in _flagged_flat(case):
+            if txn.get("direction") != "in":
+                continue
+            if not any_amount(doc, txn["amount_gbp"]):
+                continue
+            payer = txn.get("counterparty_name") or ""
+            if payer and (
+                party_overlap(payer, doc["text"])
+                or party_overlap(payer, doc.get("title") or "")
+                or (field(doc, "Employer") and party_overlap(payer, field(doc, "Employer")))
+            ):
+                hits.append(txn)
+        if not hits:
+            continue
+        matched.extend(hits)
+        evidence.append(doc["doc_id"])
+        evidence.extend(txn["transaction_id"] for txn in hits)
+        sentences.append(
+            "%s confirms a %s bonus from %s, matching the %s credit on %s."
+            % (
+                doc["doc_id"],
+                gbp(hits[0]["amount_gbp"]),
+                hits[0].get("counterparty_name"),
+                gbp(hits[0]["amount_gbp"]),
+                (hits[0].get("booked_at") or "")[:10],
+            )
+        )
+    if not matched:
+        return None
+    # Prior review may reinforce the same bonus; it must not explain a larger/new amount alone.
+    for review in case.get("reviews") or []:
+        note = (review.get("note") or "").lower()
+        if review.get("verdict") != "CLOSE" or "bonus" not in note:
+            continue
+        for txn in matched:
+            amount_bit = gbp(txn["amount_gbp"]).lower().replace(",", "")
+            note_compact = note.replace(",", "")
+            if amount_bit in note_compact or ("£%.0f" % float(txn["amount_gbp"])).lower() in note_compact:
+                sentences.append(
+                    "Earlier review %s closed the same %s bonus activity and does not describe a larger payment."
+                    % (review.get("review_id") or "on file", gbp(txn["amount_gbp"]))
+                )
+                break
+    matched_ids = {txn["transaction_id"] for txn in matched}
+    alerts = []
+    for alert in case["alerts"]:
+        if alert["rule_id"] not in {"TM01", "TM07", "TM08"}:
+            continue
+        material = _material(case, case["flagged"].get(alert["alert_id"], []))
+        if material and all(
+            txn["transaction_id"] in matched_ids
+            or (
+                txn.get("direction") == "in"
+                and "SALARY" in ((txn.get("reference") or "").upper())
+            )
+            for txn in material
+        ):
+            alerts.append(alert["alert_id"])
+    if not alerts:
+        return None
+    sentences.append("The bonus is a documented recurring employer payment, not unexplained funds.")
+    return _exp("DOCUMENTED_EVENT", alerts, evidence, sentences[:4])
+
+
 def _exp(code, alerts, evidence, sentences, strength="strong", own_account=False):
     return {
         "code": code,
@@ -768,7 +940,26 @@ def _explain_list_different(case):
     status, evidence, sentences = _assess_list(case)
     if status != "different":
         return None
-    return _exp("LIST_MATCH_DIFFERENT_PARTY", _ids(case, {"TM22"}), evidence, sentences)
+    # Attach a matching invoice/payment file when it supports the different-party reading.
+    for alert in case["alerts"]:
+        if alert["rule_id"] != "TM22":
+            continue
+        for txn in case["flagged"].get(alert["alert_id"], []):
+            for doc in docs_of(
+                case,
+                "invoice",
+                "supplier_invoice",
+                "dealer_invoice",
+                "payment_file",
+                "contract_schedule",
+            ):
+                if _party_amount_hit(doc, txn) and doc["doc_id"] not in evidence:
+                    evidence.append(doc["doc_id"])
+                    sentences = list(sentences) + [
+                        "%s matches the %s payment to %s."
+                        % (doc["doc_id"], gbp(txn["amount_gbp"]), txn.get("counterparty_name"))
+                    ]
+    return _exp("LIST_MATCH_DIFFERENT_PARTY", _ids(case, {"TM22"}), evidence, sentences[:4])
 
 
 def _row_amounts(doc):
@@ -1709,7 +1900,43 @@ def _merge_close(used):
     return _decision("CLOSE", chosen["code"], evidence, sentences[:4])
 
 
+def _held_invoice_rfi(case):
+    """Payments/FX: held payment at or above the invoice threshold needs papers before release."""
+    limit = case["policy"].get("invoice_release_gbp")
+    held = case.get("held")
+    if not limit or not held:
+        return None
+    if float(held.get("amount_gbp") or 0) < float(limit):
+        return None
+    if is_customer_party(case, held.get("counterparty_name") or ""):
+        return None
+    if _held_documented(case, held, []):
+        return None
+    name = customer_name(case)
+    return _decision(
+        "RFI",
+        "RFI_PURPOSE_DOCUMENTS",
+        [held["transaction_id"]],
+        [
+            "The held payment is %s to %s on %s, reference %s."
+            % (
+                gbp(held["amount_gbp"]),
+                held.get("counterparty_name"),
+                (held.get("booked_at") or "")[:10],
+                held.get("reference"),
+            ),
+            "Payments of %s or more to anyone other than the client need an invoice or contract before release."
+            % gbp(limit),
+            "Ask %s for the invoice or contract for this payment, showing the payee, the amount and what it is for."
+            % name,
+        ],
+    )
+
+
 def _residue(case, covered):
+    held_rfi = _held_invoice_rfi(case)
+    if held_rfi:
+        return held_rfi
     order = {"TM22": 0, "TM05": 1, "TM04": 2, "TM10": 3, "TM03": 4, "TM06": 5, "TM02": 6, "TM08": 7, "TM07": 8, "TM01": 9}
     missing = [alert for alert in case["alerts"] if alert["alert_id"] not in covered]
     missing.sort(key=lambda alert: order.get(alert["rule_id"], 9))
@@ -1917,15 +2144,35 @@ def _residue_one(case, alert):
             ],
         )
     if rule == "TM02" and _third_party_passthrough(case, txns):
+        incoming = [
+            txn
+            for txn in _flagged_flat(case)
+            if txn.get("direction") == "in" and not is_customer_party(case, txn.get("counterparty_name") or "")
+        ]
+        distinct_payers = {txn.get("counterparty_name") or "" for txn in incoming if txn.get("counterparty_name")}
+        # Many unrelated inbound payers plus rapid payout is mule activity; narrower pass-through otherwise.
+        mule_like = "TM04" in _rules(case) or len(distinct_payers) >= 6
+        code = "ESC_MULE_ACTIVITY" if mule_like else "ESC_PASS_THROUGH"
+        all_evidence = list(evidence)
+        for txn in incoming:
+            if txn["transaction_id"] not in all_evidence:
+                all_evidence.append(txn["transaction_id"])
+        for txn in txns:
+            if txn.get("direction") == "out" and txn["transaction_id"] not in all_evidence:
+                all_evidence.append(txn["transaction_id"])
         return _decision(
             "ESCALATE",
-            "ESC_PASS_THROUGH",
-            evidence,
+            code,
+            all_evidence[:12],
             [
                 "%s received funds from other people and paid most of them out within the rapid-movement window." % name,
-                "The outgoing names include %s."
-                % (", ".join(sorted({txn.get("counterparty_name") or "" for txn in txns if txn.get("direction") == "out"})[:3])),
-                "No invoice, booking or own-account statement gives the payments a purpose.",
+                "The incoming names include %s."
+                % (", ".join(sorted(distinct_payers)[:4]) or "several third parties"),
+                (
+                    "Receiving and passing on other people's money with no supporting records is mule activity."
+                    if mule_like
+                    else "No invoice, booking or own-account statement gives the payments a purpose."
+                ),
             ],
         )
     if rule == "TM01" and sample and is_customer_party(case, sample.get("counterparty_name") or ""):

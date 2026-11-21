@@ -78,10 +78,25 @@ institution folder
 | L4 Specialist agents | Logic embedded in `decide.py` / `analyze.py` | Not split into agent modules yet |
 | L5 Case evidence dossier | Case dict + optional `case["surrounding"]` | Lightweight; not a separate artefact store |
 | L6 CLOSE skeptic | `_gates` + suspicion-first ordering | Partial; not a standalone `skeptic.py` |
-| L7 Decision engine | `decide.py` | Present (core) |
+| L7 Decision engine | `decide.py` | Present (core); update-v2 hardens TM22, FX held-invoice, employer bonus, mule codes |
 | L8 Explanation | `explain.py` | Present |
 | Surrounding LLM | `surrounding.py` | **New in update-v2** — residual / fail assist |
 | Supervised ML | — | Disabled (no gold labels) |
+
+## Synthetic regression (testdata)
+
+Hand-labeled `testdata/` (`test_bank` + `test_payments_fx`, 13 cases) is the local policy regression gate:
+
+```bash
+DISABLE_LLM=1 ./run /ABS/testdata/institutions/test_bank /tmp/test_bank.jsonl
+DISABLE_LLM=1 ./run /ABS/testdata/institutions/test_payments_fx /tmp/test_payments_fx.jsonl
+python3 /ABS/testdata/score_test.py \
+  --expected /ABS/testdata/expected.jsonl \
+  --data /ABS/testdata \
+  --output /tmp/test_bank.jsonl /tmp/test_payments_fx.jsonl
+```
+
+Target: 13/13 verdicts, 0 wrongful CLOSE, schema clean.
 
 ## Surrounding trigger set
 
