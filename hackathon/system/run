@@ -5,7 +5,6 @@ import json
 import os
 import sys
 import time
-import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -13,12 +12,10 @@ import config
 
 config.load_dotenv()
 
-from analyze import classify_documents
+from analyze import STATS
 from config import parse_policy, sanity_check_policy
-from decide import decide
-from explain import render
-from facts import build_case
 from loader import load_institution
+from pipeline import allow_model, iter_cases, worker_count
 
 
 def main(argv):
@@ -35,48 +32,25 @@ def main(argv):
     parent = os.path.dirname(out_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    allow_model = _allow_model()
+    enabled = allow_model()
+    cases = bundle["cases"]
+    limit = os.environ.get("CASE_LIMIT")
+    if limit:
+        cases = cases[: int(limit)]
     counts = {}
     written = 0
-    with open(out_path, "w", encoding="utf-8") as fh:
-        for case in bundle["cases"]:
-            row = _one(bundle, policy, case, allow_model)
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=False) + "\n")
-            counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
+    with open(out_path, "w", encoding="utf-8", buffering=1) as fh:
+        for line, _view in iter_cases(bundle, policy, cases, enabled, worker_count(enabled)):
+            fh.write(json.dumps(line, ensure_ascii=False, sort_keys=False) + "\n")
+            fh.flush()
+            counts[line["verdict"]] = counts.get(line["verdict"], 0) + 1
             written += 1
     elapsed = time.time() - started
     sys.stderr.write(
-        "wrote %d cases to %s in %.1fs %s\n" % (written, out_path, elapsed, json.dumps(counts, sort_keys=True))
+        "wrote %d cases to %s in %.1fs %s agent_calls=%d agent_ok=%d\n"
+        % (written, out_path, elapsed, json.dumps(counts, sort_keys=True), STATS["calls"], STATS["ok"])
     )
     return 0
-
-
-def _allow_model():
-    if os.environ.get("DISABLE_LLM") == "1":
-        return False
-    return bool(os.environ.get("XAI_API_KEY") or os.environ.get("OPENROUTER_API_KEY"))
-
-
-def _one(bundle, policy, case, allow_model):
-    try:
-        built = build_case(bundle, policy, case, {})
-        labels = classify_documents(built["docs"], allow_model)
-        for doc in built["docs"]:
-            doc["label"] = labels.get(doc["doc_id"], "")
-        return render(built, decide(built))
-    except Exception:
-        sys.stderr.write("case %s failed\n%s\n" % (case.get("case_id"), traceback.format_exc()))
-        return {
-            "case_id": case.get("case_id"),
-            "alert_ids": list(case.get("alert_ids") or []),
-            "verdict": "ESCALATE",
-            "reason_code": "ESC_UNEXPLAINED_FUNDS",
-            "reason": (
-                "This case could not be completed from the files. "
-                "The activity is escalated because it is unexplained."
-            ),
-            "evidence": [],
-        }
 
 
 if __name__ == "__main__":

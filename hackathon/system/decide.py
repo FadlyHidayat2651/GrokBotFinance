@@ -65,6 +65,16 @@ ESC_RANK = [
 
 
 def decide(case):
+    result = _deterministic(case)
+    if result["verdict"] == "ESCALATE":
+        return result
+    veto = _agent_escalation(case)
+    if veto:
+        return veto
+    return result
+
+
+def _deterministic(case):
     suspicion = _suspicions(case)
     if suspicion:
         return suspicion
@@ -81,6 +91,47 @@ def decide(case):
             return gated
         return _merge_close(used)
     return _residue(case, covered)
+
+
+def _agent_escalation(case):
+    """The specialist agent can only add a suspicion. It cannot create a close."""
+    order = ("mule", "structuring", "corridor_refusal", "third_party_use")
+    flags = set(case.get("agent_suspicions") or [])
+    flag = next((item for item in order if item in flags), None)
+    if not flag:
+        return None
+    flagged = _flagged_flat(case)
+    evidence = [txn["transaction_id"] for txn in flagged[:6]]
+    name = customer_name(case)
+    sample = flagged[0] if flagged else None
+    amount = gbp(sample["amount_gbp"]) if sample else "the flagged amount"
+    who = _who(sample) if sample else "the counterparty"
+    when = (sample.get("booked_at") or "")[:10] if sample else ""
+    rules = _rules(case)
+    if flag == "mule":
+        code = "ESC_MULE_ACTIVITY"
+        tail = "The specialist review records that the account is receiving other people's money and passing it on."
+    elif flag == "structuring":
+        code = "ESC_STRUCTURING"
+        tail = "The specialist review records that the customer asked about staying under a reporting threshold."
+    elif flag == "corridor_refusal":
+        code = "ESC_HIGH_RISK_CORRIDOR"
+        tail = "The specialist review records that the customer would not explain a higher-risk country payment."
+    elif "TM10" in rules:
+        code = "ESC_EARLY_REDEMPTION"
+        tail = "The specialist review records that other people are moving money through the account."
+    elif "TM06" in rules:
+        code = "ESC_THIRD_PARTY_FUNDING"
+        tail = "The specialist review records that other people are funding the account."
+    else:
+        code = "ESC_PASS_THROUGH"
+        tail = "The specialist review records that other people are using the account to pass money through."
+    sentences = [
+        "%s's flagged activity includes %s with %s on %s." % (name, amount, who, when),
+        tail,
+        "That suspicion blocks a close or a customer question, so the case is escalated.",
+    ]
+    return _decision("ESCALATE", code, evidence, sentences)
 
 
 def _decision(verdict, code, evidence, sentences):

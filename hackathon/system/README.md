@@ -27,20 +27,21 @@ Thresholds and the 17 higher-risk countries are in `policy_config.json`. On star
 
 ## Model
 
-Default provider is xAI, OpenAI-compatible, `https://api.x.ai/v1/chat/completions`, model `grok-4.7`, key `XAI_API_KEY`. If that key is unset and `OPENROUTER_API_KEY` is set, the call goes to `https://openrouter.ai/api/v1/chat/completions` with model `x-ai/grok-4.7`. `LLM_PROVIDER=grok` or `LLM_PROVIDER=openrouter` forces one of those when its key is present. Temperature is 0 and the seed is 0. The HTTP client is `urllib` from the standard library.
+Default provider is xAI, OpenAI-compatible, `https://api.x.ai/v1/chat/completions`, model `grok-4.7`, key `XAI_API_KEY`. If that key is unset and `OPENROUTER_API_KEY` is set, the call goes to `https://openrouter.ai/api/v1/chat/completions` with model `x-ai/grok-4.7`. `LLM_PROVIDER=grok` or `LLM_PROVIDER=openrouter` forces one of those when its key is present. Temperature is 0 and the seed is 1. The xAI API rejects a seed of 0. The HTTP client is `urllib` from the standard library.
 
-The model is called only for a support chat or staff note that the phrase list did not label, and only to add a suspicion label. It cannot produce a `CLOSE`. One case is at most one call. The response is cached under `system/cache/` by a hash of the request, so a repeat run does not call the network and cannot change the verdict or the reason code.
+When a key is set, every case makes one specialist-agent call. The agent fills seven investigation sentences and may add a suspicion: mule activity, structuring, a refused higher-risk explanation, or other people using the account. It cannot produce a `CLOSE`. A documented escalation is kept. If the deterministic result would close or ask the customer, and the agent reports one of those suspicions, the case is escalated instead. A failed call leaves the deterministic result. The response is cached under `system/cache/` by a hash of the request, so a repeat run does not call the network and cannot change the verdict or the reason code.
 
-On the 4,000 dev cases every support chat and staff note matched the phrase list, so the run makes no model call.
+With no key, or with `DISABLE_LLM=1`, the phrase list and the document checks decide alone.
 
 ## Time and cost for 200 cases
 
-Measured on the bank dev folder with the model disabled, which is the same path the dev cases take.
+With the model disabled, 1,000 bank cases took 0.7 seconds and the first 200 took 0.058 seconds after the folder was loaded. Cost was $0.
 
-- 1,000 bank cases, including reading the folder: 0.7 seconds.
-- The first 200 bank cases, after the folder was already loaded: 0.058 seconds.
+With the key set, every case makes one completion. A sample of 6 development cases all returned, at about 17 seconds each when run one after another. Four cases run at a time (`max_workers` in `policy_config.json`). A failed call keeps the deterministic result.
 
-Cost for those 200 cases is $0. No completion was requested. A case that does need the model sends one `grok-4.7` completion. A failed call, or a missing key, keeps the deterministic result. If that result is still not a supported close, the case is `ESCALATE`.
+## Live page
+
+`python3 live.py` serves a page at `http://127.0.0.1:8765/`. Each case is decided by the same path as `./run` and the row is sent when that case is finished, in `cases.jsonl` order. The output file written beside the run is the file `validate.py` checks. `CASE_LIMIT` on `./run` decides only the first N cases. Leave it unset for a full folder.
 
 ## Checks
 

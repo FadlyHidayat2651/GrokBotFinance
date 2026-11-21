@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -15,6 +16,7 @@ import urllib.request
 from config import CONFIG, HERE
 
 CACHE_DIR = os.path.join(HERE, "cache")
+_CACHE_LOCK = threading.Lock()
 
 
 def _provider():
@@ -58,9 +60,10 @@ def complete_json(messages):
         json.dumps({"provider": provider, "payload": payload_base}, sort_keys=True).encode("utf-8")
     ).hexdigest()
     cached = _cache_path(digest)
-    if os.path.isfile(cached):
-        with open(cached, encoding="utf-8") as fh:
-            return json.load(fh)
+    with _CACHE_LOCK:
+        if os.path.isfile(cached):
+            with open(cached, encoding="utf-8") as fh:
+                return json.load(fh)
 
     variants = [
         dict(payload_base, response_format={"type": "json_object"}),
@@ -86,11 +89,12 @@ def complete_json(messages):
             if parsed is None:
                 last_error = "unparsed"
                 continue
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            temporary = cached + ".tmp"
-            with open(temporary, "w", encoding="utf-8") as fh:
-                json.dump(parsed, fh, sort_keys=True)
-            os.replace(temporary, cached)
+            with _CACHE_LOCK:
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                temporary = cached + ".tmp"
+                with open(temporary, "w", encoding="utf-8") as fh:
+                    json.dump(parsed, fh, sort_keys=True)
+                os.replace(temporary, cached)
             return parsed
         except (urllib.error.URLError, urllib.error.HTTPError, KeyError, TimeoutError, json.JSONDecodeError, OSError) as exc:
             last_error = exc
