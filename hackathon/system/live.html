@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AML triage</title>
+  <style>
+    body { font: 15px/1.4 sans-serif; margin: 16px; color: #111; background: #fff; }
+    form, fieldset { margin: 0 0 12px; padding: 8px; border: 1px solid #ccc; }
+    label { margin-right: 12px; }
+    #status { margin: 8px 0; }
+    #scroller { height: 70vh; overflow: auto; border: 1px solid #ccc; }
+    .row { box-sizing: border-box; height: 280px; overflow: auto; border-bottom: 1px solid #ddd; padding: 8px; }
+    .full .row { height: auto; }
+    pre { white-space: pre-wrap; margin: 4px 0; }
+    #custom { border-top: 1px solid #ccc; margin-top: 12px; padding-top: 8px; }
+  </style>
+</head>
+<body>
+  <p>Control order and appearance are placeholders.</p>
+  <form id="run-form">
+    <label>Institution
+      <select id="institution">
+        <option>bank</option>
+        <option>emoney</option>
+        <option>investment</option>
+        <option>payments_fx</option>
+      </select>
+    </label>
+    <label>Limit <input id="limit" type="number" min="1" placeholder="all"></label>
+    <button type="submit">Start run</button>
+  </form>
+  <fieldset>
+    <legend>Filters on this run</legend>
+    <label>Verdict
+      <select id="verdict">
+        <option value="">All</option>
+        <option>CLOSE</option>
+        <option>RFI</option>
+        <option>ESCALATE</option>
+      </select>
+    </label>
+    <label>Reason code
+      <select id="reason"><option value="">All</option></select>
+    </label>
+  </fieldset>
+  <p id="status">Idle.</p>
+  <div id="scroller"><div id="viewport"><div id="slice"></div></div></div>
+  <div id="custom">
+    <form id="case-form">
+      <label>Case
+        <select id="case-id"></select>
+      </label>
+      <button type="submit">Run this case</button>
+    </form>
+    <form id="upload-form">
+      <label>Folder <input id="folder" type="file" webkitdirectory multiple></label>
+      <button type="submit">Run uploaded folder</button>
+    </form>
+    <div id="custom-result"></div>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const LIST_MODE = params.get("list") || "window";
+    const TRANSPORT = params.get("transport") || "sse";
+    const ROW_H = 280;
+    const scroller = document.getElementById("scroller");
+    const viewport = document.getElementById("viewport");
+    const slice = document.getElementById("slice");
+    const status = document.getElementById("status");
+    if (LIST_MODE === "full") scroller.classList.add("full");
+
+    let rows = [];
+    let runId = null;
+    let runStarts = 0;
+    let readerStop = null;
+
+    function shownRows() {
+      const verdict = document.getElementById("verdict").value;
+      const reason = document.getElementById("reason").value;
+      return rows.filter(function (row) {
+        if (verdict && row.line.verdict !== verdict) return false;
+        if (reason && row.line.reason_code !== reason) return false;
+        return true;
+      });
+    }
+
+    function fillRow(article, row) {
+      article.replaceChildren();
+      const heading = document.createElement("strong");
+      heading.textContent = row.line.case_id + " " + row.line.verdict + " " + row.line.reason_code;
+      const agent = document.createElement("div");
+      agent.textContent = "Agent " + row.agent;
+      const rules = document.createElement("div");
+      rules.textContent = "Rules " + row.rules.map(function (rule) {
+        return rule.rule_id + " (" + rule.alert_id + ")";
+      }).join(", ");
+      const payments = document.createElement("div");
+      payments.textContent = row.payments.map(function (txn) {
+        return txn.amount + " from " + txn.counterparty_name + " on " + txn.booked_at + " (" + txn.transaction_id + ")";
+      }).join("; ");
+      const docs = document.createElement("div");
+      docs.textContent = row.documents.map(function (doc) {
+        return doc.doc_id + ": " + doc.title;
+      }).join("; ");
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(row.line);
+      article.append(heading, agent, rules, payments, docs, pre);
+    }
+
+    function paint() {
+      const shown = shownRows();
+      if (LIST_MODE === "full") {
+        viewport.style.height = "";
+        slice.style.transform = "";
+        const nodes = shown.map(function (row) {
+          const article = document.createElement("article");
+          article.className = "row";
+          article.dataset.caseId = row.line.case_id;
+          fillRow(article, row);
+          return article;
+        });
+        slice.replaceChildren.apply(slice, nodes);
+        return;
+      }
+      const total = shown.length;
+      const height = scroller.clientHeight || 600;
+      const maxScroll = Math.max(0, total * ROW_H - height);
+      let scrollTop = scroller.scrollTop;
+      if (scrollTop > maxScroll) {
+        scrollTop = maxScroll;
+        if (scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
+      }
+      const start = total === 0 ? 0 : Math.max(0, Math.floor(scrollTop / ROW_H) - 4);
+      const end = total === 0 ? 0 : Math.min(total, Math.ceil((scrollTop + height) / ROW_H) + 4);
+      viewport.style.height = (total * ROW_H) + "px";
+      slice.style.transform = "translateY(" + (start * ROW_H) + "px)";
+      const nodes = [];
+      for (let index = start; index < end; index += 1) {
+        const article = document.createElement("article");
+        article.className = "row";
+        article.dataset.caseId = shown[index].line.case_id;
+        fillRow(article, shown[index]);
+        nodes.push(article);
+      }
+      slice.replaceChildren.apply(slice, nodes);
+    }
+
+    function refreshReasons() {
+      const select = document.getElementById("reason");
+      const current = select.value;
+      const codes = [];
+      rows.forEach(function (row) {
+        if (codes.indexOf(row.line.reason_code) < 0) codes.push(row.line.reason_code);
+      });
+      codes.sort();
+      select.replaceChildren(new Option("All", ""));
+      codes.forEach(function (code) { select.append(new Option(code, code)); });
+      if (codes.indexOf(current) >= 0) select.value = current;
+    }
+
+    function stopReader() {
+      if (readerStop) readerStop();
+      readerStop = null;
+    }
+
+    function accept(event) {
+      if (!event || event.run_id !== runId) return;
+      if (event.kind === "case") {
+        if (rows.some(function (row) { return row.line.case_id === event.line.case_id; })) return;
+        rows.push(event);
+        refreshReasons();
+        paint();
+        status.textContent = "Run " + runId + " received " + rows.length + ". Showing " + shownRows().length + ".";
+      } else if (event.kind === "done") {
+        status.textContent = "Run " + runId + " finished. Received " + rows.length + ". Showing " + shownRows().length + ".";
+        stopReader();
+      }
+    }
+
+    async function readStream(response) {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const reader = response.body.getReader();
+      readerStop = function () { reader.cancel(); };
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const parts = buffer.split("\n");
+        buffer = parts.pop();
+        parts.forEach(function (part) {
+          const text = part.startsWith("data:") ? part.slice(5).trim() : part.trim();
+          if (!text) return;
+          try { accept(JSON.parse(text)); } catch (error) { /* ignore keepalives */ }
+        });
+      }
+    }
+
+    async function startRun(institution, limit) {
+      runStarts += 1;
+      stopReader();
+      runId = null;
+      rows = [];
+      paint();
+      const body = { institution: institution };
+      if (limit) body.limit = limit;
+      const response = await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const started = await response.json();
+      runId = started.run_id;
+      status.textContent = "Run " + runId + " started.";
+      if (TRANSPORT === "tail") {
+        const stream = await fetch("/api/tail?run_id=" + encodeURIComponent(runId));
+        await readStream(stream);
+      } else {
+        const source = new EventSource("/api/events?run_id=" + encodeURIComponent(runId));
+        readerStop = function () { source.close(); };
+        source.onmessage = function (message) {
+          accept(JSON.parse(message.data));
+        };
+      }
+    }
+
+    document.getElementById("run-form").addEventListener("submit", function (event) {
+      event.preventDefault();
+      const limit = document.getElementById("limit").value;
+      startRun(document.getElementById("institution").value, limit ? Number(limit) : null);
+    });
+    document.getElementById("verdict").addEventListener("change", paint);
+    document.getElementById("reason").addEventListener("change", paint);
+    scroller.addEventListener("scroll", function () {
+      if (LIST_MODE !== "full") paint();
+    });
+    document.getElementById("institution").addEventListener("change", async function () {
+      await loadCases();
+      if (runId) {
+        const limit = document.getElementById("limit").value;
+        startRun(this.value, limit ? Number(limit) : null);
+      }
+    });
+
+    async function loadCases() {
+      const institution = document.getElementById("institution").value;
+      const response = await fetch("/api/cases?institution=" + encodeURIComponent(institution));
+      const payload = await response.json();
+      const select = document.getElementById("case-id");
+      select.replaceChildren();
+      payload.case_ids.forEach(function (caseId) {
+        select.append(new Option(caseId, caseId));
+      });
+    }
+
+    function showCustom(event) {
+      const box = document.getElementById("custom-result");
+      const article = document.createElement("article");
+      fillRow(article, event);
+      article.style.height = "auto";
+      box.replaceChildren(article);
+    }
+
+    document.getElementById("case-form").addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const response = await fetch("/api/case", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          institution: document.getElementById("institution").value,
+          case_id: document.getElementById("case-id").value,
+        }),
+      });
+      showCustom(await response.json());
+    });
+
+    document.getElementById("upload-form").addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const files = {};
+      const chosen = document.getElementById("folder").files;
+      for (const file of chosen) {
+        files[file.webkitRelativePath || file.name] = await file.text();
+      }
+      runStarts += 1;
+      stopReader();
+      runId = null;
+      rows = [];
+      paint();
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: files }),
+      });
+      const started = await response.json();
+      runId = started.run_id;
+      const stream = await fetch((TRANSPORT === "tail" ? "/api/tail?run_id=" : "/api/events?run_id=") + encodeURIComponent(runId));
+      if (TRANSPORT === "tail") {
+        await readStream(stream);
+      } else {
+        await readStream(stream);
+      }
+    });
+
+    function benchList() {
+      const sample = [];
+      for (let index = 0; index < 1000; index += 1) {
+        sample.push({
+          kind: "case",
+          agent: "skipped",
+          rules: [{ rule_id: "TM01", alert_id: "AL" + index }],
+          payments: [{ amount: "£1.00", counterparty_name: "Payee", booked_at: "2026-01-01", transaction_id: "T" + index }],
+          documents: [{ doc_id: "D" + index, title: "Document " + index }],
+          line: {
+            case_id: "CASE-" + String(index).padStart(4, "0"),
+            alert_ids: ["AL" + index],
+            verdict: index % 5 === 0 ? "RFI" : "CLOSE",
+            reason_code: index % 5 === 0 ? "RFI_SOURCE_OF_FUNDS" : "DOCUMENTED_EVENT",
+            reason: "Sentence one. Sentence two.",
+            evidence: ["T" + index],
+          },
+        });
+      }
+      rows = sample;
+      const before = runStarts;
+      document.getElementById("verdict").value = "RFI";
+      const filterStart = performance.now();
+      paint();
+      const filterMs = performance.now() - filterStart;
+      const filteredCount = shownRows().length;
+      document.getElementById("verdict").value = "";
+      const fullBox = document.createElement("div");
+      const tFull = performance.now();
+      sample.forEach(function (row) {
+        const article = document.createElement("article");
+        article.className = "row";
+        fillRow(article, row);
+        fullBox.append(article);
+      });
+      const fullMs = performance.now() - tFull;
+      const tWindow = performance.now();
+      paint();
+      const windowMs = performance.now() - tWindow;
+      scroller.scrollTop = 1000 * ROW_H;
+      paint();
+      const visible = Array.from(slice.querySelectorAll("[data-case-id]")).map(function (node) {
+        return node.dataset.caseId;
+      });
+      document.getElementById("verdict").value = "CLOSE";
+      paint();
+      const report = {
+        full_ms: Math.round(fullMs * 10) / 10,
+        window_ms: Math.round(windowMs * 10) / 10,
+        full_dom: fullBox.childElementCount,
+        window_dom: slice.childElementCount,
+        rows_kept: rows.length,
+        filtered_rfi: filteredCount,
+        filter_run_starts: runStarts - before,
+        last_visible: visible.indexOf("CASE-0999") >= 0,
+        first_kept: rows[0].line.case_id,
+      };
+      const pre = document.createElement("pre");
+      pre.id = "bench";
+      pre.textContent = JSON.stringify(report);
+      document.body.append(pre);
+    }
+
+    loadCases().then(function () {
+      if (params.get("bench") === "list") benchList();
+      if (params.get("proof") === "1") proof();
+    });
+
+    async function proof() {
+      const report = { runStarts_at_start: runStarts };
+      await startRun("emoney", 1);
+      await waitFor(function () { return rows.length >= 1; });
+      const first = rows[0];
+      report.first = {
+        case_id: first.line.case_id,
+        verdict: first.line.verdict,
+        reason_code: first.line.reason_code,
+        evidence: first.line.evidence,
+        agent: first.agent,
+        rules: first.rules,
+        payments: first.payments,
+        documents: first.documents,
+      };
+      const startsAfterFirst = runStarts;
+      document.getElementById("verdict").value = "RFI";
+      paint();
+      report.hidden_by_filter = shownRows().length;
+      report.kept_while_filtered = rows.length;
+      report.starts_after_filter = runStarts;
+      document.getElementById("verdict").value = "";
+      paint();
+      await startRun("bank", 2);
+      await waitFor(function () { return rows.length >= 2 && rows.every(function (row) { return row.line.case_id.indexOf("BK-") === 0; }); });
+      report.after_switch = rows.map(function (row) { return row.line.case_id; });
+      report.starts_after_switch = runStarts;
+      report.starts_after_first = startsAfterFirst;
+      document.getElementById("verdict").value = "CLOSE";
+      const startsBeforeLong = runStarts;
+      await startRun("bank", 1000);
+      await waitFor(function () { return rows.length >= 30; });
+      report.arrived_before_filter_check = rows.length;
+      report.showing_while_running = shownRows().length;
+      report.starts_while_running = runStarts;
+      await waitFor(function () { return rows.length >= 1000; });
+      const shown = shownRows();
+      report.kept_after_long_run = rows.length;
+      report.showing_after_filter = shown.length;
+      report.showing_verdicts = shown.reduce(function (acc, row) {
+        if (acc.indexOf(row.line.verdict) < 0) acc.push(row.line.verdict);
+        return acc;
+      }, []);
+      report.starts_after_long_run = runStarts;
+      report.starts_before_long = startsBeforeLong;
+      const firstKept = rows[0].line.case_id;
+      const lastReceived = rows[rows.length - 1].line.case_id;
+      const lastShown = shown.length ? shown[shown.length - 1].line.case_id : "";
+      scroller.scrollTop = 0;
+      paint();
+      scroller.scrollTop = shown.length * ROW_H;
+      paint();
+      const visible = Array.from(slice.querySelectorAll("[data-case-id]")).map(function (node) {
+        return node.dataset.caseId;
+      });
+      report.first_kept = firstKept;
+      report.last_kept = lastReceived;
+      report.last_shown = lastShown;
+      report.last_visible = visible.indexOf(lastShown) >= 0;
+      report.visible_after_scroll = visible;
+      const pre = document.createElement("pre");
+      pre.id = "proof";
+      pre.textContent = JSON.stringify(report);
+      document.body.append(pre);
+    }
+
+    function waitFor(check) {
+      return new Promise(function (resolve) {
+        const started = Date.now();
+        const timer = setInterval(function () {
+          if (check() || Date.now() - started > 20000) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 30);
+      });
+    }
+  </script>
+</body>
+</html>

@@ -39,6 +39,10 @@ With the model disabled, 1,000 bank cases took 0.7 seconds and the first 200 too
 
 With the key set, every case makes one completion. A sample of 6 development cases all returned, at about 17 seconds each when run one after another. Four cases run at a time (`max_workers` in `policy_config.json`). A failed call keeps the deterministic result.
 
+## Live page
+
+`python3 live.py` serves a page at `http://127.0.0.1:8765/`. Each case is decided by the same path as `./run` and the row is sent when that case is finished, in `cases.jsonl` order. The output file written beside the run is the file `validate.py` checks. `CASE_LIMIT` on `./run` decides only the first N cases. Leave it unset for a full folder.
+
 ## Checks
 
 `python3 validate.py <institution_folder> <output.jsonl>` checks that every case is present once, in order, with a reason code that belongs to the verdict, 2–4 sentences, and evidence ids that exist in that folder.

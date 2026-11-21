@@ -267,6 +267,7 @@ def review(case, allow_model):
         doc["label"] = labels.get(doc["doc_id"], "")
     case["agent_suspicions"] = []
     case["agent_called"] = False
+    case["agent_status"] = "skipped"
     if not allow_model:
         return case
     parsed = llm.complete_json(_agent_prompt(case))
@@ -276,6 +277,9 @@ def review(case, allow_model):
         for item in parsed.get("suspicions") or []:
             if item in AGENT_SUSPICIONS and item not in flags:
                 flags.append(item)
+        case["agent_status"] = "ran"
+    else:
+        case["agent_status"] = "failed"
     flags.sort()
     case["agent_suspicions"] = flags
     with _STATS_LOCK:
