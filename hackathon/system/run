@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -13,8 +14,8 @@ import config
 
 config.load_dotenv()
 
-from analyze import classify_documents
-from config import parse_policy, sanity_check_policy
+from analyze import STATS, review
+from config import CONFIG, parse_policy, sanity_check_policy
 from decide import decide
 from explain import render
 from facts import build_case
@@ -36,17 +37,21 @@ def main(argv):
     if parent:
         os.makedirs(parent, exist_ok=True)
     allow_model = _allow_model()
+    workers = int(CONFIG["max_workers"]) if allow_model else 1
+    if workers > 1 and len(bundle["cases"]) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            rows = list(pool.map(lambda case: _one(bundle, policy, case, allow_model), bundle["cases"]))
+    else:
+        rows = [_one(bundle, policy, case, allow_model) for case in bundle["cases"]]
     counts = {}
-    written = 0
     with open(out_path, "w", encoding="utf-8") as fh:
-        for case in bundle["cases"]:
-            row = _one(bundle, policy, case, allow_model)
+        for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=False) + "\n")
             counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
-            written += 1
     elapsed = time.time() - started
     sys.stderr.write(
-        "wrote %d cases to %s in %.1fs %s\n" % (written, out_path, elapsed, json.dumps(counts, sort_keys=True))
+        "wrote %d cases to %s in %.1fs %s agent_calls=%d agent_ok=%d\n"
+        % (len(rows), out_path, elapsed, json.dumps(counts, sort_keys=True), STATS["calls"], STATS["ok"])
     )
     return 0
 
@@ -60,9 +65,7 @@ def _allow_model():
 def _one(bundle, policy, case, allow_model):
     try:
         built = build_case(bundle, policy, case, {})
-        labels = classify_documents(built["docs"], allow_model)
-        for doc in built["docs"]:
-            doc["label"] = labels.get(doc["doc_id"], "")
+        review(built, allow_model)
         return render(built, decide(built))
     except Exception:
         sys.stderr.write("case %s failed\n%s\n" % (case.get("case_id"), traceback.format_exc()))
