@@ -39,13 +39,18 @@ Round amounts, a shared device on its own, and crypto on its own do not decide a
 
 Thresholds and the 17 higher-risk countries are in `policy_config.json`. On startup the program compares that list with the folder's `POLICY.md` and prints a note on stderr if they differ. It does not stop.
 
-## Model
+## Model / LLM
 
 Default provider is xAI, OpenAI-compatible, `https://api.x.ai/v1/chat/completions`, model `grok-4.7`, key `XAI_API_KEY`. If that key is unset and `OPENROUTER_API_KEY` is set, the call goes to `https://openrouter.ai/api/v1/chat/completions` with model `x-ai/grok-4.7`. `LLM_PROVIDER=grok` or `LLM_PROVIDER=openrouter` forces one of those when its key is present. Temperature is 0 and the seed is 0. The HTTP client is `urllib` from the standard library.
 
-The model is called only for a support chat or staff note that the phrase list did not label, and only to add a suspicion label. It cannot produce a `CLOSE`. One case is at most one call. The response is cached under `system/cache/` by a hash of the request, so a repeat run does not call the network and cannot change the verdict or the reason code.
+LLM is used in two places, both optional:
 
-On the 4,000 dev cases every support chat and staff note matched the phrase list, so the run makes no model call.
+1. **`analyze.py`** — label a support chat or staff note that the phrase list did not catch (suspicion / story labels only).
+2. **`surrounding.py`** — if the first `decide` pass is a weak residue, ask for labels, findings, and concrete `missing_info`, then re-decide. May turn unexplained escalate into an RFI ask; must not invent CLOSE.
+
+The model cannot produce a verdict. Responses are cached under `system/cache/` by a hash of the request, so a repeat run does not call the network and cannot change the verdict or the reason code.
+
+On the 4,000 dev cases every support chat and staff note matched the phrase list, so the run makes no model call when keys are absent or the phrase list covers the text.
 
 ## Time and cost for 200 cases
 
