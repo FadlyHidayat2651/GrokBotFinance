@@ -19,6 +19,7 @@ from decide import decide
 from explain import render
 from facts import build_case
 from loader import load_institution
+from surrounding import enrich_if_needed
 
 
 def main(argv):
@@ -63,7 +64,9 @@ def _one(bundle, policy, case, allow_model):
         labels = classify_documents(built["docs"], allow_model)
         for doc in built["docs"]:
             doc["label"] = labels.get(doc["doc_id"], "")
-        return render(built, decide(built))
+        decision = decide(built)
+        built, decision = enrich_if_needed(built, decision, allow_model)
+        return render(built, decision)
     except Exception:
         sys.stderr.write("case %s failed\n%s\n" % (case.get("case_id"), traceback.format_exc()))
         return {
