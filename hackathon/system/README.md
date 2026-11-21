@@ -27,7 +27,7 @@ Thresholds and the 17 higher-risk countries are in `policy_config.json`. On star
 
 ## Model
 
-Default provider is xAI, OpenAI-compatible, `https://api.x.ai/v1/chat/completions`, model `grok-4.7`, key `XAI_API_KEY`. If that key is unset and `OPENROUTER_API_KEY` is set, the call goes to `https://openrouter.ai/api/v1/chat/completions` with model `x-ai/grok-4.7`. `LLM_PROVIDER=grok` or `LLM_PROVIDER=openrouter` forces one of those when its key is present. Temperature is 0 and the seed is 0. The HTTP client is `urllib` from the standard library.
+Default provider is xAI, OpenAI-compatible, `https://api.x.ai/v1/chat/completions`, model `grok-4.7`, key `XAI_API_KEY`. If that key is unset and `OPENROUTER_API_KEY` is set, the call goes to `https://openrouter.ai/api/v1/chat/completions` with model `x-ai/grok-4.7`. `LLM_PROVIDER=grok` or `LLM_PROVIDER=openrouter` forces one of those when its key is present. Temperature is 0 and the seed is 1. The xAI API rejects a seed of 0. The HTTP client is `urllib` from the standard library.
 
 The model is called only for a support chat or staff note that the phrase list did not label, and only to add a suspicion label. It cannot produce a `CLOSE`. One case is at most one call. The response is cached under `system/cache/` by a hash of the request, so a repeat run does not call the network and cannot change the verdict or the reason code.
 
